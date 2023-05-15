@@ -1,0 +1,3 @@
+%{
+  "dep_from_git": {:git, "https://github.com/adrienmo/buffer.git", "2f77c98753dc72bd9b9925cb241557d5f1d295c0", [tag: "0.1.2"]},
+}
