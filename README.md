@@ -1,6 +1,6 @@
-# Playground
+# Elixir Toy DNS Resolver
 
-**TODO: Add description**
+This project is an effort to translate the ["Implement DNS in a weekend"](https://jvns.ca/blog/2023/05/12/introducing-implement-dns-in-a-weekend/) guide from Julia Evans.
 
 ## Installation
 
