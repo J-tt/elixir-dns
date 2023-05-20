@@ -1,7 +1,7 @@
 defmodule Resolver do
   import Bitwise
 
-  defmodule DNSHeader do
+  defmodule Header do
     defstruct id: nil,
               flags: nil,
               num_questions: 0,
@@ -10,17 +10,52 @@ defmodule Resolver do
               num_additionals: 0
   end
 
-  defmodule DNSQuestion do
+  defmodule Question do
     defstruct [:name, :type, :class]
   end
 
-  defp headerToBitstring(%DNSHeader{} = header) do
+  defmodule Record do
+    defstruct [:name, :type, :class, :ttl, :data]
+  end
+
+  defp headerToBitstring(%Header{} = header) do
     <<header.id::16, header.flags::binary, header.num_questions::16, header.num_answers::16,
       header.num_authorities::16, header.num_additionals::16>>
   end
 
-  defp questionToBitstring(%DNSQuestion{} = question) do
+  defp bitstringToHeader(
+         <<id::16, flags::16, num_questions::16, num_answers::16, num_authorities::16,
+           num_additionals::16>>
+       ) do
+    %Resolver.Header{
+      id: id,
+      flags: flags,
+      num_questions: num_questions,
+      num_answers: num_answers,
+      num_authorities: num_authorities,
+      num_additionals: num_additionals
+    }
+  end
+
+  defp questionToBitstring(%Question{} = question) do
     <<question.name::binary, question.type::16, question.class::16>>
+  end
+
+  defp bitstringToQuestion(bitstring, accumulator \\ []) do
+    <<len::8, domainParts::binary-size(len), remainder::binary>> = bitstring
+
+    if len == 0 do
+      {accumulator, remainder}
+    else
+      bitstringToQuestion(remainder, accumulator ++ [domainParts])
+    end
+  end
+
+  defp unpackDNSResponse(<<headerRaw::binary-size(12), remainder::binary>>) do
+    header = bitstringToHeader(headerRaw)
+
+    {domainParts, remainder} = bitstringToQuestion(remainder)
+    {header, domainParts, remainder}
   end
 
   defp encodeName(name) do
@@ -39,8 +74,8 @@ defmodule Resolver do
     name = encodeName(name)
     id = :rand.uniform(65535)
     flags = <<1 <<< 8::16>>
-    header = headerToBitstring(%DNSHeader{id: id, flags: flags, num_questions: 1})
-    question = questionToBitstring(%DNSQuestion{name: name, type: recordType, class: 1})
+    header = headerToBitstring(%Header{id: id, flags: flags, num_questions: 1})
+    question = questionToBitstring(%Question{name: name, type: recordType, class: 1})
     header <> question
   end
 
@@ -50,10 +85,9 @@ defmodule Resolver do
     :ok = :gen_udp.send(socket, {8, 8, 8, 8}, 53, dnsPacket)
 
     return =
-      case :gen_udp.recv(socket, 1024, :infinity) do
-        {:ok, {address, port, data}} ->
-          {:ok, {data, {address, port}}}
-
+      with {:ok, {_address, _port, data}} <- :gen_udp.recv(socket, 1024, :infinity) do
+        unpackDNSResponse(data)
+      else
         {:error, :closed} ->
           {:ok, nil}
 
