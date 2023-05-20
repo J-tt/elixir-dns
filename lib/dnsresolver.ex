@@ -41,34 +41,38 @@ defmodule Resolver do
     <<question.name::binary, question.type::16, question.class::16>>
   end
 
-  defp bitstringToName(bitstring, accumulator \\ [])
+  defp bitstringToName(body, nameRaw, accumulator \\ [])
 
   defp bitstringToName(
+         _body,
          <<0::8, remainder::binary>>,
          accumulator
        ) do
-    IO.puts("bitstring to name end")
     {accumulator, remainder}
   end
 
   defp bitstringToName(
+         body,
          <<len::8, domainParts::binary-size(len), remainder::binary>>,
          accumulator
        ) do
-    IO.puts("bitstring to name")
-    bitstringToName(remainder, accumulator ++ [domainParts])
+    bitstringToName(body, remainder, accumulator ++ [domainParts])
   end
 
   defp bitstringToName(
+         body,
          <<1::1, 1::1, pointer::14, remainder::binary>>,
          _accumulator
        ) do
-    IO.puts("bitstring to name compression: #{pointer}")
-    "unknown"
+    <<_::binary-size(pointer - 12), nameRaw::binary>> = body
+    {name, _} = bitstringToName(body, nameRaw)
+    {name, remainder}
   end
 
   defp bitstringToQuestion(bitstring) do
-    {domainParts, <<type::16, class::16, remainder::binary>>} = bitstringToName(bitstring)
+    {domainParts, <<type::16, class::16, remainder::binary>>} =
+      bitstringToName(bitstring, bitstring)
+
     domain = Enum.join(domainParts, ".")
 
     {%Resolver.Question{
@@ -78,25 +82,31 @@ defmodule Resolver do
      }, remainder}
   end
 
-  defp bitstringToAnswer(bitstring) do
-    {name, <<type::16, class::16, ttl::32, remainder::binary>>} = bitstringToName(bitstring)
+  defp bitstringToAnswer(body, answer) do
+    {name, <<type::16, 1::16, ttl::32, len::16, data::binary-size(len), remainder::binary>>} =
+      bitstringToName(body, answer)
 
-    %Resolver.Answer{
-      name: name,
-      type: type,
-      class: class,
-      ttl: ttl,
-      data: remainder
-    }
+    {%Resolver.Answer{
+       name: Enum.join(name, "."),
+       type: type,
+       class: 1,
+       ttl: ttl,
+       data: data
+     }, remainder}
   end
 
-  defp unpackDNSResponse(<<headerRaw::binary-size(12), remainder::binary>>) do
+  defp unpackDNSResponse(<<headerRaw::binary-size(12), body::binary>>) do
     header = bitstringToHeader(headerRaw)
 
-    {question, remainder} = bitstringToQuestion(remainder)
-    answer = bitstringToAnswer(remainder)
+    {question, answerRaw} = bitstringToQuestion(body)
 
-    {header, question, answer}
+    answers =
+      Enum.reduce(1..header.num_answers, {[], answerRaw}, fn _, {answers, remainder} ->
+        {answer, answerRaw} = bitstringToAnswer(body, remainder)
+        {[answer | answers], answerRaw}
+      end)
+
+    {header, question, answers}
   end
 
   defp encodeName(name) do
