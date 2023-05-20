@@ -14,7 +14,7 @@ defmodule Resolver do
     defstruct [:name, :type, :class]
   end
 
-  defmodule Record do
+  defmodule Answer do
     defstruct [:name, :type, :class, :ttl, :data]
   end
 
@@ -41,21 +41,62 @@ defmodule Resolver do
     <<question.name::binary, question.type::16, question.class::16>>
   end
 
-  defp bitstringToQuestion(bitstring, accumulator \\ []) do
-    <<len::8, domainParts::binary-size(len), remainder::binary>> = bitstring
+  defp bitstringToName(bitstring, accumulator \\ [])
 
-    if len == 0 do
-      {accumulator, remainder}
-    else
-      bitstringToQuestion(remainder, accumulator ++ [domainParts])
-    end
+  defp bitstringToName(
+         <<0::8, remainder::binary>>,
+         accumulator
+       ) do
+    IO.puts("bitstring to name end")
+    {accumulator, remainder}
+  end
+
+  defp bitstringToName(
+         <<len::8, domainParts::binary-size(len), remainder::binary>>,
+         accumulator
+       ) do
+    IO.puts("bitstring to name")
+    bitstringToName(remainder, accumulator ++ [domainParts])
+  end
+
+  defp bitstringToName(
+         <<1::1, 1::1, pointer::14, remainder::binary>>,
+         _accumulator
+       ) do
+    IO.puts("bitstring to name compression: #{pointer}")
+    "unknown"
+  end
+
+  defp bitstringToQuestion(bitstring) do
+    {domainParts, <<type::16, class::16, remainder::binary>>} = bitstringToName(bitstring)
+    domain = Enum.join(domainParts, ".")
+
+    {%Resolver.Question{
+       name: domain,
+       type: type,
+       class: class
+     }, remainder}
+  end
+
+  defp bitstringToAnswer(bitstring) do
+    {name, <<type::16, class::16, ttl::32, remainder::binary>>} = bitstringToName(bitstring)
+
+    %Resolver.Answer{
+      name: name,
+      type: type,
+      class: class,
+      ttl: ttl,
+      data: remainder
+    }
   end
 
   defp unpackDNSResponse(<<headerRaw::binary-size(12), remainder::binary>>) do
     header = bitstringToHeader(headerRaw)
 
-    {domainParts, remainder} = bitstringToQuestion(remainder)
-    {header, domainParts, remainder}
+    {question, remainder} = bitstringToQuestion(remainder)
+    answer = bitstringToAnswer(remainder)
+
+    {header, question, answer}
   end
 
   defp encodeName(name) do
