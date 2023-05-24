@@ -1,9 +1,9 @@
-defmodule DNS.MixProject do
+defmodule ElixirDNS.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :dns,
+      app: :elixirdns,
       version: "0.1.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
