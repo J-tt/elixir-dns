@@ -1,4 +1,5 @@
 defmodule Resolver do
+  @domainRoot {198, 41, 0, 4}
   import Bitwise
 
   defmodule Header do
@@ -142,7 +143,7 @@ defmodule Resolver do
           octet
         end
 
-      Enum.join(octets, ".")
+      List.to_tuple(octets)
     end
   end
 
@@ -155,7 +156,6 @@ defmodule Resolver do
 
     IO.inspect(header, label: "header")
 
-    # TODO: bug, enum is called multiple times even when header.num_answers is 0
     {answers, remainder} =
       if header.num_answers > 0 do
         Enum.reduce(1..header.num_answers, {[], data}, fn _, {answers, remainder} ->
@@ -171,8 +171,8 @@ defmodule Resolver do
       if header.num_authorities > 0 do
         Enum.reduce(1..header.num_authorities, {[], remainder}, fn _, {answers, remainder} ->
           IO.puts("enumerating authorities")
-          {answer, remainder} = Answer.fromBitstring(body, remainder)
-          {[answer | answers], remainder}
+          {answer, answerRaw} = Answer.fromBitstring(body, remainder)
+          {[answer | answers], answerRaw}
         end)
       else
         {nil, remainder}
@@ -189,14 +189,13 @@ defmodule Resolver do
         {nil, nil}
       end
 
-    {header, question, answers, authorities, additionals}
+    {:ok, {header, question, answers, authorities, additionals}}
   end
 
   defp buildQuery(name, recordType) do
     name = Name.toBitstring(name)
     id = :rand.uniform(65535)
     flags = <<0 <<< 8::16>>
-    # flags = <<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>
     header = Header.toBitstring(%Header{id: id, flags: flags, num_questions: 1})
     question = Question.toBitstring(%Question{name: name, type: recordType, class: 1})
     header <> question
@@ -220,5 +219,34 @@ defmodule Resolver do
 
     :gen_udp.close(socket)
     return
+  end
+
+  def recursiveQuery(domain, nameserver \\ @domainRoot) do
+    IO.inspect(domain, label: "recursive query for domain")
+    {:ok, data} = query(domain, nameserver)
+
+    case data do
+      {_header, _question, answers, _, _} when answers != nil ->
+        IO.inspect(answers, label: "Found Answer")
+        {:ok, answers}
+
+      {_header, _question, _answers, authorities, additionals} when authorities != nil ->
+        if additionals != nil do
+          additionals = Enum.filter(additionals, fn x -> 1 == x.type end)
+          nameserver = Enum.at(additionals, 1)
+          IO.inspect(nameserver, label: "Using nameserver from additionals")
+          recursiveQuery(domain, nameserver.data)
+        else
+          authority = Enum.at(authorities, 1)
+          IO.inspect(authority.data, label: "Looking up address of authority")
+          {:ok, results} = recursiveQuery(authority.data)
+          nameserver = Enum.at(results, 1)
+          IO.inspect(nameserver, label: "Found authority address")
+          recursiveQuery(domain, nameserver.data)
+        end
+
+      _ ->
+        {:unknownrecursion}
+    end
   end
 end
