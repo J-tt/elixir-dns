@@ -25,12 +25,16 @@ defmodule Resolver do
               num_additionals: 0
 
     @doc """
+    Accepts a `Header` struct and returns a corresponding bitstring.
     """
     def toBitstring(%Header{} = header) do
       <<header.id::16, header.flags::binary, header.num_questions::16, header.num_answers::16,
         header.num_authorities::16, header.num_additionals::16>>
     end
 
+    @doc """
+    Accepts a correctly formatted bitstring and returns a new `Header`.
+    """
     def fromBitstring(
           <<id::16, flags::16, num_questions::16, num_answers::16, num_authorities::16,
             num_additionals::16>>
@@ -47,6 +51,11 @@ defmodule Resolver do
   end
 
   defmodule Question do
+    @moduledoc """
+    This module implements decoding and encoding DNS Question packet segments. It decodes the name via the Name module.
+
+    Questiosn are structured as a 2-byte integer for type, 2-byte integer for class and the remainder is an encoded name.
+    """
     defstruct [:name, :type, :class]
 
     def toBitstring(%Question{} = question) do
@@ -72,9 +81,6 @@ defmodule Resolver do
 
     def fromBitstring(body, answer) do
       {name, remainder} = Resolver.Name.fromBitstring(body, answer)
-
-      IO.inspect(name, label: "name")
-      IO.inspect(remainder, label: "remainder")
 
       <<type::16, remainder::binary>> = remainder
 
@@ -125,7 +131,6 @@ defmodule Resolver do
           <<1::1, 1::1, pointer::14, remainder::binary>>,
           accumulator
         ) do
-      IO.inspect(pointer, label: "dns compression pointer")
       <<_::binary-size(pointer - 12), nameRaw::binary>> = body
       {name, _} = fromBitstring(body, nameRaw)
       {accumulator ++ name, remainder}
@@ -144,8 +149,6 @@ defmodule Resolver do
           <<len::8, domainParts::binary-size(len), remainder::binary>>,
           accumulator
         ) do
-      IO.inspect(domainParts, label: "domainparts")
-      IO.inspect(len, label: "domain part length")
       fromBitstring(body, remainder, accumulator ++ [domainParts])
     end
   end
@@ -159,21 +162,20 @@ defmodule Resolver do
 
       List.to_tuple(octets)
     end
+
+    def prettyPrint(ip) do
+      ip |> Tuple.to_list() |> Enum.join(".")
+    end
   end
 
   defp unpackDNSResponse(<<headerRaw::binary-size(12), body::binary>>) do
-    Logger.debug("unpacking header")
     header = Header.fromBitstring(headerRaw)
 
-    Logger.debug("unpacking question")
     {question, data} = Question.fromBitstring(body)
-
-    IO.inspect(header, label: "header")
 
     {answers, remainder} =
       if header.num_answers > 0 do
         Enum.reduce(1..header.num_answers, {[], data}, fn _, {answers, remainder} ->
-          Logger.debug("enumerating answer")
           {answer, remainder} = Answer.fromBitstring(body, remainder)
           {[answer | answers], remainder}
         end)
@@ -184,7 +186,6 @@ defmodule Resolver do
     {authorities, additionalsRaw} =
       if header.num_authorities > 0 do
         Enum.reduce(1..header.num_authorities, {[], remainder}, fn _, {answers, remainder} ->
-          Logger.debug("enumerating authorities")
           {answer, answerRaw} = Answer.fromBitstring(body, remainder)
           {[answer | answers], answerRaw}
         end)
@@ -195,7 +196,6 @@ defmodule Resolver do
     {additionals, _} =
       if header.num_additionals > 0 do
         Enum.reduce(1..header.num_additionals, {[], additionalsRaw}, fn _, {answers, remainder} ->
-          Logger.debug("enumerating additionals")
           {answer, remainder} = Answer.fromBitstring(body, remainder)
           {[answer | answers], remainder}
         end)
@@ -236,26 +236,34 @@ defmodule Resolver do
   end
 
   def recursiveQuery(domain, nameserver \\ @domainRoot) do
-    IO.inspect(domain, label: "recursive query for domain")
+    Logger.info("Querying #{IP.prettyPrint(nameserver)} for #{domain}")
     {:ok, data} = query(domain, nameserver)
 
     case data do
       {_header, _question, answers, _, _} when answers != nil ->
-        IO.inspect(answers, label: "Found Answer")
+        Logger.info("Answer(s) found: #{inspect(answers)}")
+
         {:ok, answers}
 
       {_header, _question, _answers, authorities, additionals} when authorities != nil ->
+        Logger.info("Answers are nil, using authority or additional")
+
         if additionals != nil do
-          additionals = Enum.filter(additionals, fn x -> 1 == x.type end)
-          nameserver = Enum.at(additionals, 0)
-          IO.inspect(nameserver, label: "Using nameserver from additionals")
+          # Filter out IPv6 additionals and pick first result
+          nameserver = Enum.filter(additionals, fn x -> 1 == x.type end) |> Enum.at(0)
+
+          Logger.info(
+            "Using #{nameserver.name} (#{IP.prettyPrint(nameserver.data)}) from additionals"
+          )
+
+          # Recurse with 
           recursiveQuery(domain, nameserver.data)
         else
           authority = Enum.at(authorities, 0)
-          IO.inspect(authority.data, label: "Looking up address of authority")
+          Logger.info("Additionals are empty, looking up authority")
           {:ok, results} = recursiveQuery(authority.data)
           nameserver = Enum.at(results, 0)
-          IO.inspect(nameserver, label: "Found authority address")
+          Logger.info("Found authority: #{IP.prettyPrint(nameserver.data)}")
           recursiveQuery(domain, nameserver.data)
         end
 
